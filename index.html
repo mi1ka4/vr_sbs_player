@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>SBS VR Плеер</title>
+<style>
+  :root{
+    --bg:#08090b; --panel:#111318; --line:#22262e; --text:#e7e9ec;
+    --dim:#8a8f98; --accent:#5ee6c8; --accent-dim:#2a5a52;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{
+    margin:0; padding:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+    overscroll-behavior:none;
+  }
+  #app{ min-height:100dvh; display:flex; flex-direction:column; }
+  header{ padding:20px 20px 8px; flex-shrink:0; }
+  h1{ font-size:15px; font-weight:600; letter-spacing:0.02em; margin:0 0 2px; }
+  .sub{ font-size:12.5px; color:var(--dim); line-height:1.5; margin:0; }
+  main{ flex:1; display:flex; flex-direction:column; gap:14px; padding:16px 20px 24px; overflow-y:auto; }
+  .card{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .picker{
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:10px; padding:32px 16px; border:1.5px dashed var(--line); border-radius:12px;
+    cursor:pointer; text-align:center;
+  }
+  .picker svg{ width:28px; height:28px; stroke:var(--accent); opacity:0.9; }
+  .picker span.t{ font-size:14px; font-weight:600; }
+  .picker span.d{ font-size:12px; color:var(--dim); }
+  input[type=file]{ display:none; }
+
+  .stage{
+    position:relative; width:100%; aspect-ratio:16/9; background:#000;
+    border-radius:12px; overflow:hidden; display:none;
+  }
+  .stage.active{ display:block; }
+  .eye-row{ position:absolute; inset:0; display:flex; }
+  .eye{ position:relative; width:50%; height:100%; }
+  .eye canvas{ width:100%; height:100%; display:block; touch-action:none; transform-origin:center center; will-change:transform; }
+
+  .gaze-menu{
+    position:absolute; left:0; right:0; bottom:10%; display:flex; justify-content:center;
+    gap:10px; opacity:0; pointer-events:none; transition:opacity 0.2s ease;
+  }
+  .gaze-menu.visible{ opacity:1; }
+  .gaze-btn{
+    position:relative; overflow:hidden; padding:8px 12px; border-radius:10px;
+    background:rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.18);
+    color:#fff; font-size:12px; text-align:center; min-width:44px;
+  }
+  .gaze-btn.active{ border-color:var(--accent); }
+  .gaze-btn span{ position:relative; z-index:1; }
+  .gaze-btn i{
+    position:absolute; left:0; bottom:0; top:0; width:calc(var(--progress, 0) * 100%);
+    background:rgba(124,196,255,0.35); display:block;
+  }
+
+  label.opt{ display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; }
+  .segmented{ display:flex; background:#0d0f13; border:1px solid var(--line); border-radius:9px; padding:2px; gap:2px; }
+  .segmented button{
+    flex:1; border:none; background:transparent; color:var(--dim); font-size:12.5px;
+    padding:7px 10px; border-radius:7px; font-family:inherit; font-weight:500;
+  }
+  .segmented button.on{ background:var(--accent-dim); color:var(--accent); }
+
+  .btn{
+    appearance:none; -webkit-appearance:none; border:none; border-radius:11px;
+    padding:13px 16px; font-size:14.5px; font-weight:600; font-family:inherit;
+    display:flex; align-items:center; justify-content:center; gap:8px; width:100%;
+  }
+  .btn-primary{ background:var(--accent); color:#03231d; }
+  .btn-ghost{ background:#161a20; color:var(--text); border:1px solid var(--line); }
+  .btn:active{ opacity:0.8; }
+
+  .controls-bar{ display:flex; gap:10px; margin-top:12px; }
+  .controls-bar .btn{ flex:1; }
+
+  .slider-row{ display:flex; flex-direction:column; gap:6px; margin-top:12px; }
+  .slider-row .lbl{ display:flex; justify-content:space-between; font-size:12px; color:var(--dim); }
+  input[type=range]{ -webkit-appearance:none; width:100%; height:28px; background:transparent; }
+  input[type=range]::-webkit-slider-runnable-track{ height:4px; background:var(--line); border-radius:2px; }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:18px; height:18px; border-radius:50%;
+    background:var(--accent); margin-top:-7px;
+  }
+
+  .filename{ font-size:12px; color:var(--dim); margin-top:8px; word-break:break-all; }
+  .section-title{ font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--dim); margin:16px 0 4px; }
+  .gyro-status{ font-size:11.5px; color:var(--dim); margin-top:8px; }
+  .gyro-status.on{ color:var(--accent); }
+
+  #app.pseudo-fs{ position:fixed; inset:0; z-index:1000; background:#000; overflow:hidden; }
+  #app.pseudo-fs .stage{ aspect-ratio:auto; height:100dvh; border-radius:0; }
+
+  /* Safari rotates the page itself when the phone is physically turned to
+     landscape - we don't fight it with a manual CSS transform (that can
+     land 180° off depending on which way the phone is turned, which swaps
+     left/right and desyncs the split during the rotation animation).
+     Instead we just ask the user to rotate while in portrait. */
+  .rotate-hint{
+    position:fixed; inset:0; z-index:1002; display:none; align-items:center;
+    justify-content:center; flex-direction:column; gap:14px; background:rgba(0,0,0,0.92);
+    color:#fff; text-align:center; padding:24px;
+  }
+  .rotate-hint svg{ width:48px; height:48px; stroke:var(--accent); animation:tilt 1.6s ease-in-out infinite; }
+  .rotate-hint span{ font-size:14px; color:var(--dim); max-width:260px; }
+  @keyframes tilt{ 0%,100%{ transform:rotate(0deg); } 50%{ transform:rotate(90deg); } }
+  #app.pseudo-fs.is-portrait .rotate-hint{ display:flex; }
+  #app.pseudo-fs header,
+  #app.pseudo-fs .card:not(.stage-card),
+  #app.pseudo-fs .filename{ display:none; }
+  #app.pseudo-fs main{ padding:0; gap:0; overflow:hidden; height:100dvh; }
+  #app.pseudo-fs .stage-card{ padding:0; border:none; border-radius:0; background:#000; height:100%; }
+  #app.pseudo-fs .stage{ border-radius:0; }
+  .exit-fs{
+    position:fixed; top:max(14px, env(safe-area-inset-top)); right:14px; z-index:1001;
+    width:38px; height:38px; border-radius:50%; background:rgba(0,0,0,0.55);
+    border:1px solid rgba(255,255,255,0.15); color:#fff; display:none; align-items:center;
+    justify-content:center; font-size:16px;
+  }
+  #app.pseudo-fs .exit-fs{ display:flex; }
+
+  .recenter-toast{
+    position:fixed; bottom:max(18px, env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    z-index:1001; padding:8px 16px; border-radius:20px; background:rgba(0,0,0,0.55);
+    border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12.5px; font-family:inherit;
+    opacity:0; pointer-events:none; transition:opacity 0.15s ease;
+  }
+  .recenter-toast.show{ opacity:1; }
+
+  .privacy-note{
+    font-size:11px; color:var(--dim); line-height:1.5; margin-top:14px; padding-top:14px;
+    border-top:1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>SBS VR Плеер</h1>
+    <p class="sub">Изогнутый экран в 3D-пространстве + гироскоп.</p>
+  </header>
+
+  <main>
+    <div class="card">
+      <label class="picker" id="pickerLabel">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 9 12 4 17 9"/><line x1="12" y1="4" x2="12" y2="16"/></svg>
+        <span class="t">Выбрать видео</span>
+        <span class="d">Файл остаётся на устройстве</span>
+        <input id="fileInput" type="file" accept="video/*">
+      </label>
+      <div class="filename" id="filename"></div>
+    </div>
+
+    <div class="card stage-card">
+      <div class="stage" id="stage">
+        <div class="eye-row" id="eyeRow">
+          <div class="eye">
+            <canvas id="glcanvasL"></canvas>
+            <div class="gaze-menu">
+              <div class="gaze-btn" data-action="back"><span>⏪ 10с</span><i></i></div>
+              <div class="gaze-btn" data-action="toggle"><span>⏯</span><i></i></div>
+              <div class="gaze-btn" data-action="fwd"><span>10с ⏩</span><i></i></div>
+            </div>
+          </div>
+          <div class="eye">
+            <canvas id="glcanvasR"></canvas>
+            <div class="gaze-menu">
+              <div class="gaze-btn" data-action="back"><span>⏪ 10с</span><i></i></div>
+              <div class="gaze-btn" data-action="toggle"><span>⏯</span><i></i></div>
+              <div class="gaze-btn" data-action="fwd"><span>10с ⏩</span><i></i></div>
+            </div>
+          </div>
+        </div>
+        <button class="exit-fs" id="exitFs">✕</button>
+        <div class="recenter-toast" id="recenterToast">⟲ Отцентровано</div>
+        <div class="rotate-hint" id="rotateHint">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
+          <span>Поверни телефон в горизонтальное положение для VR-режима</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="settingsCard" style="display:none;">
+      <label class="opt">Формат входного видео
+        <div class="segmented" id="formatSeg">
+          <button data-v="sbs" class="on">SBS</button>
+          <button data-v="tb">TB</button>
+          <button data-v="mono">Моно</button>
+        </div>
+      </label>
+
+      <div class="section-title">Экран</div>
+      <label class="opt">Тип поверхности
+        <div class="segmented" id="surfaceSeg">
+          <button data-v="cylinder" class="on">Цилиндр</button>
+          <button data-v="sphere">VR180</button>
+        </div>
+      </label>
+      <div class="slider-row">
+        <div class="lbl"><span>Изгиб экрана</span><span id="curveVal">100°</span></div>
+        <input type="range" id="curve" min="30" max="180" value="100">
+      </div>
+      <div class="slider-row">
+        <div class="lbl"><span>Поле зрения (зум)</span><span id="fovVal">90°</span></div>
+        <input type="range" id="fov" min="50" max="120" value="90">
+      </div>
+
+      <div class="slider-row">
+        <div class="lbl"><span>Расстояние между глазами (IPD)</span><span id="ipdVal">64 мм</span></div>
+        <input type="range" id="ipd" min="30" max="90" value="64" step="1">
+      </div>
+      <div class="slider-row">
+        <div class="lbl"><span>Масштаб изображения</span><span id="scaleVal">100%</span></div>
+        <input type="range" id="scale" min="40" max="100" value="100" step="1">
+      </div>
+
+      <div class="controls-bar">
+        <button class="btn btn-ghost" id="playBtn">▶ Плей</button>
+        <button class="btn btn-primary" id="gyroBtn">🧭 Включить гироскоп</button>
+      </div>
+      <div class="gyro-status" id="gyroStatus">Гироскоп выключен</div>
+
+      <div class="controls-bar">
+        <button class="btn btn-primary" id="vrBtn" style="width:100%;">🥽 VR-режим</button>
+      </div>
+
+      <div class="privacy-note">
+        В VR-режиме: тап по экрану ставит центр туда, куда сейчас смотрит телефон — тапни сразу после входа в VR, держа телефон так, как будет удобно смотреть. Работает офлайн, файл никуда не загружается.
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const fileInput = document.getElementById('fileInput');
+const filenameEl = document.getElementById('filename');
+const stage = document.getElementById('stage');
+const canvasL = document.getElementById('glcanvasL');
+const canvasR = document.getElementById('glcanvasR');
+const settingsCard = document.getElementById('settingsCard');
+const playBtn = document.getElementById('playBtn');
+const vrBtn = document.getElementById('vrBtn');
+const gyroBtn = document.getElementById('gyroBtn');
+const gyroStatus = document.getElementById('gyroStatus');
+const exitFs = document.getElementById('exitFs');
+const eyeRow = document.getElementById('eyeRow');
+const recenterToast = document.getElementById('recenterToast');
+const formatSeg = document.getElementById('formatSeg');
+const surfaceSeg = document.getElementById('surfaceSeg');
+const app = document.getElementById('app');
+const curveSlider = document.getElementById('curve');
+const fovSlider = document.getElementById('fov');
+const curveVal = document.getElementById('curveVal');
+const fovVal = document.getElementById('fovVal');
+
+const ipdSlider = document.getElementById('ipd');
+const ipdVal = document.getElementById('ipdVal');
+const scaleSlider = document.getElementById('scale');
+const scaleVal = document.getElementById('scaleVal');
+
+let video = document.createElement('video');
+video.setAttribute('playsinline', '');
+video.setAttribute('webkit-playsinline', '');
+video.muted = false;
+video.preload = 'auto';
+video.loop = true;
+
+let wakeLock = null;
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => {
+        console.log('Wake Lock released');
+      });
+      console.log('Wake Lock active');
+    }
+  } catch (err) {
+    console.warn('Wake Lock not available:', err);
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+
+let format = 'sbs';
+let curveDeg = 100;
+let fovDeg = 90;
+
+let ipdMm = 64;          // миллиметры
+let screenScale = 1.0;   // множитель масштаба картинки на холсте (CSS-трансформация, не 3D)
+
+function applyEyeScale() {
+  // IPD is handled here too, as a horizontal screen-space shift of each eye's
+  // canvas - NOT a 3D camera position offset. The stereo parallax is already
+  // baked into the source video (left/right halves), so physically moving
+  // the render cameras apart on top of that double-counts parallax and warps
+  // the curved screen asymmetrically. Shifting the flat rendered image left/
+  // right is the correct, standard way to align it with the viewer's actual
+  // eye spacing relative to the headset's fixed lens centers.
+  const shiftPct = (ipdMm - 64) * 0.2;
+  canvasL.style.transform = `scale(${screenScale}) translateX(${-shiftPct}%)`;
+  canvasR.style.transform = `scale(${screenScale}) translateX(${shiftPct}%)`;
+}
+
+let surfaceType = 'cylinder';
+
+let scene, rendererL, rendererR, leftCam, rightCam, videoTexture;
+let screenLeft, screenRight;
+const LEFT_LAYER = 1, RIGHT_LAYER = 2;
+
+let gyroEnabled = false;
+let deviceQuat = new THREE.Quaternion();
+let recenterOffset = new THREE.Quaternion();
+let screenOrientAngle = 0;
+
+function makeRenderer(canvasEl) {
+  const r = new THREE.WebGLRenderer({
+    canvas: canvasEl,
+    antialias: false,          // curved video texture doesn't need MSAA; saves a lot of GPU time
+    alpha: false,
+    stencil: false,
+    powerPreference: 'high-performance'
+  });
+  r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  return r;
+}
+
+function initThree() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+
+  rendererL = makeRenderer(canvasL);
+  rendererR = makeRenderer(canvasR);
+
+  videoTexture = new THREE.VideoTexture(video);
+  videoTexture.repeat.x = -1;
+  videoTexture.offset.x = 1;
+  videoTexture.minFilter = THREE.LinearFilter;
+  videoTexture.magFilter = THREE.LinearFilter;
+  videoTexture.generateMipmaps = false;
+  // Three.js's VideoTexture checks video.readyState every render call (up to
+  // 60x/sec) and re-uploads the frame to the GPU each time, even though the
+  // source video is usually 24-30fps. On phones this extra upload work is a
+  // common cause of stutter. If the browser supports requestVideoFrameCallback
+  // we drive texture updates from actual decoded frames instead.
+  videoTexture.needsUpdate = false;
+  if ('requestVideoFrameCallback' in video) {
+    videoTexture.autoUpdate = false;
+    const onVideoFrame = () => {
+      videoTexture.needsUpdate = true;
+      video.requestVideoFrameCallback(onVideoFrame);
+    };
+    video.requestVideoFrameCallback(onVideoFrame);
+  }
+
+  leftCam = new THREE.PerspectiveCamera(fovDeg, 1, 0.05, 50);
+  rightCam = new THREE.PerspectiveCamera(fovDeg, 1, 0.05, 50);
+  leftCam.layers.set(LEFT_LAYER);
+  rightCam.layers.set(RIGHT_LAYER);
+
+  buildScreens();
+  resizeCanvas();
+  rendererL.setAnimationLoop(renderLoop);
+}
+
+function eyeUV() {
+  // returns [ [uOffsetL, uScaleL, vOffsetL, vScaleL], [uOffsetR, uScaleR, vOffsetR, vScaleR] ]
+  if (format === 'mono') return [[0,1,0,1],[0,1,0,1]];
+  if (format === 'tb')   return [[0,1,0.5,0.5],[0,1,0,0.5]];
+  return [[0,0.5,0,1],[0.5,0.5,0,1]]; // sbs
+}
+
+function buildScreens() {
+  [screenLeft, screenRight].forEach(m => { if (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } });
+
+  const vw = video.videoWidth || 1920;
+  const vh = video.videoHeight || 1080;
+  let eyeAspect;
+  if (format === 'sbs') eyeAspect = (vw/2)/vh;
+  else if (format === 'tb') eyeAspect = vw/(vh/2);
+  else eyeAspect = vw/vh;
+
+  const baseRadius = surfaceType === 'sphere' ? 3.0 : 2.2;
+  const radius = baseRadius;
+  const thetaLength = THREE.MathUtils.degToRad(curveDeg);
+  const thetaStart = -Math.PI/2 - thetaLength/2; // centers arc facing -Z (camera forward)
+  const arcLength = radius * thetaLength;
+  const height = arcLength / eyeAspect;
+
+  const uvs = eyeUV();
+
+  function makeMesh(uv, layer) {
+    let geo;
+    if (surfaceType === 'sphere') {
+        geo = new THREE.SphereGeometry(
+            radius,
+            96,
+            64,
+            -Math.PI / 2,
+            Math.PI,
+            0,
+            Math.PI
+        );
+    } else {
+        geo = new THREE.CylinderGeometry(
+            radius,
+            radius,
+            height,
+            64,
+            1,
+            true,
+            thetaStart,
+            thetaLength
+        );
+    }
+    const uvAttr = geo.attributes.uv;
+    for (let i = 0; i < uvAttr.count; i++) {
+        const u = uvAttr.getX(i);
+        const v = uvAttr.getY(i);
+        uvAttr.setXY(
+            i,
+            uv[0] + u * uv[1],
+            uv[2] + v * uv[3]
+        );
+    }
+    uvAttr.needsUpdate = true;
+    const mat = new THREE.MeshBasicMaterial({
+        map: videoTexture,
+        side: THREE.BackSide,
+        toneMapped: false
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.layers.set(layer);
+    scene.add(mesh);
+    return mesh;
+}
+
+  screenLeft = makeMesh(uvs[1], LEFT_LAYER);
+  screenRight = makeMesh(uvs[0], RIGHT_LAYER);
+}
+
+function resizeOne(rendererX, canvasEl, cam) {
+  const rect = canvasEl.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return; // layout not settled yet, skip a bad frame
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  const w = Math.round(rect.width * dpr);
+  const h = Math.round(rect.height * dpr);
+  rendererX.setSize(w, h, false);
+  cam.aspect = w / h;
+  cam.updateProjectionMatrix();
+}
+function resizeCanvas() {
+  if (!rendererL || !rendererR) return;
+  resizeOne(rendererL, canvasL, leftCam);
+  resizeOne(rendererR, canvasR, rightCam);
+}
+function resizeCanvasSoon() {
+  // iOS animates the Safari chrome/toolbar in and out and rotates layout
+  // asynchronously, so a single delayed resize often reads stale
+  // dimensions. Retry a few times to reliably land on the final size.
+  [0, 50, 150, 300, 600].forEach(t => setTimeout(resizeCanvas, t));
+}
+window.addEventListener('resize', resizeCanvasSoon);
+window.addEventListener('orientationchange', resizeCanvasSoon);
+if (window.ResizeObserver) {
+  new ResizeObserver(resizeCanvasSoon).observe(stage);
+}
+
+// ---------- Rotate-device hint (Safari rotates the page itself; we just wait) ----------
+function isPortrait() {
+  return window.innerHeight > window.innerWidth;
+}
+function updateRotateHint() {
+  if (!app.classList.contains('pseudo-fs')) return;
+  app.classList.toggle('is-portrait', isPortrait());
+  resizeCanvasSoon();
+}
+window.addEventListener('resize', updateRotateHint);
+window.addEventListener('orientationchange', updateRotateHint);
+
+// ---------- Gyroscope (DeviceOrientationEvent, no WebXR needed) ----------
+let alpha = 0, beta = 0, gamma = 0;
+const zee = new THREE.Vector3(0, 0, 1);
+const q0 = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+const euler = new THREE.Euler();
+
+function onDeviceOrientation(e) {
+  if (e.alpha === null) return;
+  alpha = THREE.MathUtils.degToRad(e.alpha);
+  beta = THREE.MathUtils.degToRad(e.beta);
+  gamma = THREE.MathUtils.degToRad(e.gamma);
+}
+
+function updateScreenOrientAngle() {
+  const angle = (screen.orientation && screen.orientation.angle) ? screen.orientation.angle : (window.orientation || 0);
+  screenOrientAngle = THREE.MathUtils.degToRad(angle);
+}
+window.addEventListener('orientationchange', updateScreenOrientAngle);
+updateScreenOrientAngle();
+
+function computeDeviceQuaternion() {
+  euler.set(beta, alpha, -gamma, 'YXZ');
+  deviceQuat.setFromEuler(euler);
+  deviceQuat.multiply(q1);
+  deviceQuat.multiply(q0.setFromAxisAngle(zee, -screenOrientAngle));
+}
+
+const worldY = new THREE.Vector3(0, 1, 0);
+const yawEuler = new THREE.Euler();
+
+let correctionDegrees = -90; // будем менять в консоли
+let yawCorrection = 0;    // радианы, пересчитывается из correctionDegrees
+
+function recenter() {
+  computeDeviceQuaternion();
+  // Only cancel the yaw (left/right compass heading), not the full
+  // orientation. Baking in the full quaternion also freezes in pitch/roll,
+  // which get noisy right at beta≈90° - exactly the tilt you get holding
+  // the phone upright facing you in a VR viewer - and that noise is what
+  // was pushing the "centered" view off to one side.
+  yawEuler.setFromQuaternion(deviceQuat, 'YXZ');
+  yawCorrection = correctionDegrees * Math.PI / 180;
+  recenterOffset.setFromAxisAngle(worldY, -(yawEuler.y + yawCorrection));
+}
+function showRecenterToast() {
+  recenterToast.classList.add('show');
+  clearTimeout(showRecenterToast._t);
+  showRecenterToast._t = setTimeout(() => recenterToast.classList.remove('show'), 700);
+}
+eyeRow.addEventListener('click', () => {
+  if (!gyroEnabled || gazeMenuVisible) return;
+  recenter();
+  showRecenterToast();
+});
+
+// ---------- Gaze menu (look down to control playback hands-free) ----------
+const gazeMenus = document.querySelectorAll('.gaze-menu');
+const gazeBtns = document.querySelectorAll('.gaze-btn');
+const gazeForward = new THREE.Vector3();
+const gazeEuler2 = new THREE.Euler();
+let gazeMenuVisible = false;
+let gazeTarget = null;
+let gazeStart = 0;
+let gazeArmed = true;
+
+const GAZE_DWELL_MS = 1100;
+// Menu appears for a moderate downward glance (~30-55°), not straight down.
+// Straight down (~90°) is right where the sensor math gets unstable, and
+// asking the user to crane their neck that far isn't comfortable anyway.
+const GAZE_PITCH_MAX = -0.9;   // must look down at least ~29°
+const GAZE_PITCH_MIN = -1;  // but not more than ~54°
+const GAZE_YAW_DEADZONE = 0.18; // rad either side of center = play/pause
+
+function setGazeProgress(target, progress) {
+  gazeBtns.forEach(btn => {
+    if (btn.dataset.action === target) {
+      btn.style.setProperty('--progress', progress);
+      btn.classList.toggle('active', progress > 0);
+    } else {
+      btn.style.setProperty('--progress', 0);
+      btn.classList.remove('active');
+    }
+  });
+}
+
+function fireGazeAction(target) {
+  if (target === 'toggle') {
+    if (video.paused) { video.play(); playBtn.textContent = '⏸ Пауза'; }
+    else { video.pause(); playBtn.textContent = '▶ Играть'; }
+  } else if (target === 'back') {
+    video.currentTime = Math.max(0, video.currentTime - 10);
+  } else if (target === 'fwd') {
+    video.currentTime = Math.min(video.duration || 1e9, video.currentTime + 10);
+  }
+}
+
+function updateGazeMenu(finalQuat) {
+  gazeForward.set(0, 0, -1).applyQuaternion(finalQuat);
+  const visible = gazeForward.y < GAZE_PITCH_MAX && gazeForward.y > GAZE_PITCH_MIN;
+  gazeMenuVisible = visible;
+  gazeMenus.forEach(el => el.classList.toggle('visible', visible));
+
+  if (!visible) {
+    gazeTarget = null;
+    gazeArmed = true;
+    setGazeProgress(null, 0);
+    return;
+  }
+
+  gazeEuler2.setFromQuaternion(finalQuat, 'YXZ');
+  const yaw = gazeEuler2.y;
+  let target;
+  if (yaw > GAZE_YAW_DEADZONE) target = 'back';
+  else if (yaw < -GAZE_YAW_DEADZONE) target = 'fwd';
+  else target = 'toggle';
+
+  if (target !== gazeTarget) {
+    gazeTarget = target;
+    gazeStart = performance.now();
+    gazeArmed = true;
+  }
+  if (!gazeArmed) return;
+
+  const progress = Math.min(1, (performance.now() - gazeStart) / GAZE_DWELL_MS);
+  setGazeProgress(target, progress);
+  if (progress >= 1) {
+    fireGazeAction(target);
+    gazeArmed = false; // must look away and back to fire again
+  }
+}
+
+async function enableGyro() {
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') {
+        gyroStatus.textContent = 'Доступ к датчикам не разрешён (проверь Настройки → Safari → Motion & Orientation Access)';
+        return;
+      }
+    }
+    window.addEventListener('deviceorientation', onDeviceOrientation);
+    gyroEnabled = true;
+    gyroStatus.textContent = 'Гироскоп включён';
+    gyroStatus.classList.add('on');
+    gyroBtn.textContent = '🧭 Гироскоп: вкл';
+    recenter();
+  } catch (err) {
+    gyroStatus.textContent = 'Не удалось включить гироскоп: ' + err.message;
+  }
+}
+gyroBtn.addEventListener('click', enableGyro);
+
+// ---------- Render loop ----------
+function renderLoop() {
+  let finalQuat = new THREE.Quaternion(); // единичный по умолчанию
+
+  if (gyroEnabled) {
+    computeDeviceQuaternion();
+    finalQuat = recenterOffset.clone().multiply(deviceQuat);
+    updateGazeMenu(finalQuat);
+  }
+
+  // IPD is applied as a CSS transform on the canvases (see applyEyeScale),
+  // not as a camera position offset - keep both cameras co-located so the
+  // curved screen isn't warped asymmetrically on top of the baked-in parallax.
+  leftCam.position.set(-0.032, 0, 0).applyQuaternion(finalQuat);
+  leftCam.quaternion.copy(finalQuat);
+
+  rightCam.position.set(0.032, 0, 0).applyQuaternion(finalQuat);
+  rightCam.quaternion.copy(finalQuat);
+
+  rendererL.render(scene, leftCam);
+  rendererR.render(scene, rightCam);
+}
+// ---------- UI wiring ----------
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  video.src = url;
+  filenameEl.textContent = file.name;
+  video.addEventListener('loadedmetadata', () => {
+    stage.classList.add('active');
+    settingsCard.style.display = 'block';
+    if (!scene) initThree();
+    else buildScreens();
+    resizeCanvas();
+    applyEyeScale();
+  }, { once: true });
+});
+
+formatSeg.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  [...formatSeg.children].forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  format = btn.dataset.v;
+  if (scene) buildScreens();
+});
+
+surfaceSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    [...surfaceSeg.children].forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    surfaceType = btn.dataset.v;
+    curveSlider.disabled = surfaceType === 'sphere';
+    if (scene) buildScreens();
+});
+
+curveSlider.addEventListener('input', () => {
+  curveDeg = parseInt(curveSlider.value, 10);
+  curveVal.textContent = curveDeg + '°';
+  if (scene) buildScreens();
+});
+fovSlider.addEventListener('input', () => {
+  fovDeg = parseInt(fovSlider.value, 10);
+  fovVal.textContent = fovDeg + '°';
+  if (leftCam) {
+    leftCam.fov = fovDeg; rightCam.fov = fovDeg;
+    leftCam.updateProjectionMatrix(); rightCam.updateProjectionMatrix();
+  }
+});
+
+playBtn.addEventListener('click', () => {
+  if (video.paused) { video.play(); playBtn.textContent = '⏸ Пауза'; }
+  else { video.pause(); playBtn.textContent = '▶ Плей'; }
+});
+
+ipdSlider.addEventListener('input', () => {
+  ipdMm = parseInt(ipdSlider.value, 10);
+  ipdVal.textContent = ipdMm + ' мм';
+  applyEyeScale(); // мгновенный CSS-сдвиг, без пересчёта 3D
+});
+
+scaleSlider.addEventListener('input', () => {
+  screenScale = parseInt(scaleSlider.value, 10) / 100;
+  scaleVal.textContent = Math.round(screenScale * 100) + '%';
+  applyEyeScale(); // мгновенно, без пересборки 3D-сцены
+});
+
+function enterPseudoFullscreen() {
+  requestWakeLock();
+  app.classList.add('pseudo-fs');
+  if (app.requestFullscreen) app.requestFullscreen().catch(() => {});
+  if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+  updateRotateHint();
+  resizeCanvasSoon();
+  video.play();
+  playBtn.textContent = '⏸ Пауза';
+  if (gyroEnabled) recenter();
+}
+function exitPseudoFullscreen() {
+  releaseWakeLock();
+  app.classList.remove('pseudo-fs', 'is-portrait');
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+  resizeCanvasSoon();
+}
+vrBtn.addEventListener('click', enterPseudoFullscreen);
+exitFs.addEventListener('click', exitPseudoFullscreen);
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) app.classList.remove('pseudo-fs', 'is-portrait');
+  resizeCanvasSoon();
+});
+</script>
+</body>
+</html>
